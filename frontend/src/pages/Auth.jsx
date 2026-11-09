@@ -14,7 +14,7 @@ const T = {
 };
 
 export default function Auth({ mode }) {
-  const [sp] = useSearchParams(); const nav = useNavigate(); const { login, register, user, refresh } = useAuth();
+  const [sp] = useSearchParams(); const nav = useNavigate(); const { login, firebaseLogin, register, user, refresh } = useAuth();
   const [f, setF] = useState({ name: '', email: '', password: '' }); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [err, setErr] = useState('');
   const next = sp.get('next'); const token = sp.get('token');
   useTitle(T[mode][0]);
@@ -32,6 +32,20 @@ export default function Auth({ mode }) {
     } catch (ex) { setErr(errMsg(ex)); }
     setBusy(false);
   };
+  const submitFirebase = async () => {
+    setErr('');
+    setBusy(true);
+    try {
+      const u = await firebaseLogin(f.email, f.password);
+      toast.success('Signed in with Firebase');
+      go(u);
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
     <div className="yk-container grid gap-0 py-10 lg:grid-cols-2">
@@ -52,6 +66,17 @@ export default function Auth({ mode }) {
             {err && <p className="text-sm" style={{ color: '#F19A8E' }} role="alert" data-testid="auth-error">{err}</p>}
             <button disabled={busy} className="yk-btn w-full !py-3" data-testid="auth-submit">{busy ? 'Please wait…' : { login: 'Sign in', register: 'Create account', 'forgot-password': 'Send reset link', 'reset-password': 'Update password' }[mode]}</button>
           </form>
+        )}
+        {mode === 'login' && !msg && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={submitFirebase}
+            className="yk-btn mt-4 w-full !py-3"
+            data-testid="firebase-login"
+          >
+            Sign in with Firebase
+          </button>
         )}
         <p className="mt-6 text-sm yk-muted">
           {mode === 'login' && <>New to YKNOVA Studio? <Link to={`/register${next ? `?next=${encodeURIComponent(next)}` : ''}`} className="font-semibold underline" style={{ color: 'var(--text)' }} data-testid="goto-register">Create an account</Link></>}

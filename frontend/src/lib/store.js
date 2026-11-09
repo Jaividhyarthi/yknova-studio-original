@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api, getToken, setToken, errMsg } from './api';
+import { firebaseAuth } from './firebase';
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 
 const AuthCtx = createContext(null);
 const StoreCtx = createContext(null);
@@ -22,15 +24,34 @@ export function AuthProvider({ children }) {
     const { data } = await api.post('/auth/login', { email, password });
     setToken(data.token); setUser(data.user); return data.user;
   };
+  const firebaseLogin = async (email, password) => {
+    const credential = await signInWithEmailAndPassword(
+      firebaseAuth, email, password
+    );
+    try {
+      const idToken = await credential.user.getIdToken(true);
+      const { data } = await api.post('/auth/firebase/exchange', {
+        token: idToken
+      });
+      setToken(data.token);
+      setUser(data.user);
+      return data.user;
+    } catch (error) {
+      await signOut(firebaseAuth).catch(() => {});
+      throw error;
+    }
+  };
+
   const register = async (body) => {
     const { data } = await api.post('/auth/register', body);
     setToken(data.token); setUser(data.user); return data.user;
   };
   const logout = async () => {
     try { await api.post('/auth/logout'); } catch { /* token may already be invalid */ }
+    await signOut(firebaseAuth).catch(() => {});
     setToken(null); setUser(null);
   };
-  return <AuthCtx.Provider value={{ user, ready, login, register, logout, refresh, setUser }}>{children}</AuthCtx.Provider>;
+  return <AuthCtx.Provider value={{ user, ready, login, firebaseLogin, register, logout, refresh, setUser }}>{children}</AuthCtx.Provider>;
 }
 export const useAuth = () => useContext(AuthCtx);
 
