@@ -85,6 +85,11 @@ def init():
         CREATE TABLE IF NOT EXISTS auth_tokens(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,purpose TEXT NOT NULL,payload TEXT NOT NULL DEFAULT '',expires_at TEXT NOT NULL,used INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS reviews(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,product_id TEXT NOT NULL,rating INTEGER NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(user_id,product_id));''')
         add_cols(c, 'users', [('status', "TEXT NOT NULL DEFAULT 'active'"), ('email_verified', 'INTEGER NOT NULL DEFAULT 0'), ('updated_at', 'TEXT'), ('last_login_at', 'TEXT'), ('token_version', 'INTEGER NOT NULL DEFAULT 0'), ('phone', "TEXT NOT NULL DEFAULT ''"), ('pending_email', "TEXT NOT NULL DEFAULT ''"), ('notify_prefs', "TEXT NOT NULL DEFAULT '{}'")])
+        add_cols(c, 'users', [('firebase_uid', 'TEXT')])
+        c.execute(
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_firebase_uid '
+            'ON users(firebase_uid)'
+        )
         add_cols(c, 'products', [('short_description', "TEXT NOT NULL DEFAULT ''"), ('subcategory', "TEXT NOT NULL DEFAULT ''"), ('compare_price', 'INTEGER'), ('featured', 'INTEGER NOT NULL DEFAULT 0'), ('new_release', 'INTEGER NOT NULL DEFAULT 0'), ('tech_stack', "TEXT NOT NULL DEFAULT ''"), ('licenses', "TEXT NOT NULL DEFAULT ''"), ('gallery', "TEXT NOT NULL DEFAULT '[]'"), ('live_demo_url', "TEXT NOT NULL DEFAULT ''"), ('demo_video_url', "TEXT NOT NULL DEFAULT ''"), ('version', "TEXT NOT NULL DEFAULT '1.0.0'"), ('specs', "TEXT NOT NULL DEFAULT '{}'"), ('changelog', "TEXT NOT NULL DEFAULT '[]'"), ('updated_at', 'TEXT'), ('published_at', 'TEXT'), ('scheduled_at', 'TEXT'), ('is_demo', 'INTEGER NOT NULL DEFAULT 0')])
         add_cols(c, 'orders', [('subtotal', 'INTEGER'), ('discount', 'INTEGER NOT NULL DEFAULT 0'), ('tax', 'INTEGER NOT NULL DEFAULT 0'), ('currency', "TEXT NOT NULL DEFAULT 'INR'"), ('discount_code', "TEXT NOT NULL DEFAULT ''"), ('billing', "TEXT NOT NULL DEFAULT '{}'"), ('paid_at', 'TEXT'), ('updated_at', 'TEXT'), ('failure_reason', "TEXT NOT NULL DEFAULT ''"), ('refunded_amount', 'INTEGER NOT NULL DEFAULT 0'), ('payment_provider', "TEXT NOT NULL DEFAULT 'razorpay'")])
         add_cols(c, 'order_items', [('title_snapshot', "TEXT NOT NULL DEFAULT ''"), ('license_snapshot', "TEXT NOT NULL DEFAULT ''"), ('version_snapshot', "TEXT NOT NULL DEFAULT ''")])
@@ -261,6 +266,87 @@ def do_login(body, request):
 def login(body: Login, request: Request): return do_login(body, request)
 @app.post('/api/auth/login')
 def login_v3(body: Login, request: Request): return do_login(body, request)
+
+
+# ---------- Firebase authentication ----------
+@app.post('/api/auth/firebase/exchange')
+def firebase_exchange(body: TokenIn):
+    import firebase_admin
+    from firebase_admin import auth as firebase_auth
+    from firebase_admin import credentials
+
+    project_id = os.environ.get('FIREBASE_PROJECT_ID')
+    if not project_id:
+        raise HTTPException(503, 'Firebase is not configured')
+
+    try:
+        fb_app = firebase_admin.get_app()
+    except ValueError:
+        try:
+            fb_app = firebase_admin.initialize_app(
+                credentials.ApplicationDefault(),
+                {'projectId': project_id}
+            )
+        except Exception:
+            log.exception('Firebase initialization failed')
+            raise HTTPException(503, 'Firebase authentication unavailable')
+
+    try:
+        claims = firebase_auth.verify_id_token(
+            body.token,
+            app=fb_app,
+            check_revoked=True
+        )
+    except firebase_auth.ExpiredIdTokenError:
+        raise HTTPException(401, 'Firebase session expired')
+    except (
+        firebase_auth.InvalidIdTokenError,
+        firebase_auth.RevokedIdTokenError,
+        firebase_auth.UserDisabledError,
+        ValueError
+    ):
+        raise HTTPException(401, 'Invalid Firebase session')
+    except Exception:
+        log.exception('Firebase token verification unavailable')
+        raise HTTPException(503, 'Firebase authentication unavailable')
+
+    uid = claims.get('uid')
+    email = (claims.get('email') or '').strip().lower()
+
+    if not uid or not email or not claims.get('email_verified'):
+        raise HTTPException(403, 'Verified Firebase email required')
+
+    with conn() as c:
+        user = one(
+            c,
+            'SELECT * FROM users WHERE firebase_uid=?',
+            (uid,)
+        )
+
+        if not user:
+            raise HTTPException(
+                403,
+                'Firebase account is not yet linked to a store account'
+            )
+
+        if user['email'].lower() != email:
+            raise HTTPException(
+                403,
+                'Firebase email does not match linked account'
+            )
+
+        if user['status'] != 'active':
+            raise HTTPException(403, 'Account is not active')
+
+        c.execute(
+            'UPDATE users SET last_login_at=? WHERE id=?',
+            (now(), user['id'])
+        )
+
+        return {
+            'token': token(user, user['token_version']),
+            'user': public_user(user)
+        }
 
 @app.get('/api/me')
 def me(user=Depends(auth)): return public_user(user)
