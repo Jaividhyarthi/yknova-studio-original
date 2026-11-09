@@ -1218,7 +1218,7 @@ def analytics(days: int = 30, start: str = '', end: str = '', user=Depends(admin
         revenue = sum(o['total'] - o['refunded_amount'] for o in paid)
         created = one(c, 'SELECT COUNT(*) n FROM orders WHERE created_at BETWEEN ? AND ?', (s, e))['n']
         abandoned = one(c, "SELECT COUNT(*) n FROM orders WHERE status IN ('pending','failed','canceled') AND created_at BETWEEN ? AND ?", (s, e))['n']
-        top = rows(c, f"SELECT oi.product_id,COALESCE(NULLIF(oi.title_snapshot,''),p.title) title,p.preview,p.category,COUNT(*) units,SUM(oi.unit_price) revenue FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN products p ON p.id=oi.product_id WHERE o.status IN {PAID} AND COALESCE(o.paid_at,o.created_at) BETWEEN ? AND ? GROUP BY oi.product_id ORDER BY revenue DESC LIMIT 8", (s, e))
+        top = rows(c, f"SELECT oi.product_id,COALESCE(NULLIF(oi.title_snapshot,''),p.title) title,p.preview,p.category,COUNT(*) units,SUM(oi.unit_price) revenue FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN products p ON p.id=oi.product_id WHERE o.status IN {PAID} AND COALESCE(o.paid_at,o.created_at) BETWEEN ? AND ? GROUP BY oi.product_id,oi.title_snapshot,p.title,p.preview,p.category ORDER BY revenue DESC LIMIT 8", (s, e))
         for t in top: t['preview_url'] = img_url(t.get('preview') or '')
         by_cat = rows(c, f"SELECT COALESCE(p.category,'Other') category,SUM(oi.unit_price) revenue,COUNT(*) units FROM order_items oi JOIN orders o ON o.id=oi.order_id LEFT JOIN products p ON p.id=oi.product_id WHERE o.status IN {PAID} AND COALESCE(o.paid_at,o.created_at) BETWEEN ? AND ? GROUP BY 1 ORDER BY 2 DESC", (s, e))
         buyers = {o['user_id'] for o in paid}
