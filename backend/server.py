@@ -324,9 +324,52 @@ def firebase_exchange(body: TokenIn):
         )
 
         if not user:
-            raise HTTPException(
-                403,
-                'Firebase account is not yet linked to a store account'
+            # Never take over an existing account by matching email.
+            existing = one(
+                c,
+                'SELECT id FROM users WHERE email=?',
+                (email,)
+            )
+            if existing:
+                raise HTTPException(
+                    409,
+                    'This email already has a store account. '
+                    'Secure account linking is required.'
+                )
+
+            new_id = uuid.uuid4().hex
+            display_name = (
+                claims.get('name') or email.split('@')[0]
+            ).strip()[:120]
+
+            try:
+                c.execute(
+                    '''INSERT INTO users
+                    (id,email,name,pw,role,created_at,
+                     updated_at,email_verified,firebase_uid)
+                    VALUES(?,?,?,?,?,?,?,?,?)''',
+                    (
+                        new_id,
+                        email,
+                        display_name,
+                        hash_password(secrets.token_urlsafe(48)),
+                        'customer',
+                        now(),
+                        now(),
+                        1,
+                        uid
+                    )
+                )
+            except sqlite3.IntegrityError:
+                raise HTTPException(
+                    409,
+                    'An account with this identity already exists'
+                )
+
+            user = one(
+                c,
+                'SELECT * FROM users WHERE id=?',
+                (new_id,)
             )
 
         if user['email'].lower() != email:
