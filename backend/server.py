@@ -33,8 +33,12 @@ app = FastAPI(title='YKNOVA Studio API', version='3.0')
 app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_credentials=False, allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], allow_headers=['Authorization', 'Content-Type'])
 app.mount('/images', StaticFiles(directory=str(IMAGES)), name='images')
 from storage import put_object, get_object, init_storage, presign_download, is_r2
+import psycopg
+from pg_compat import connect as postgres_connect, assert_schema_ready
 
 def conn():
+    if os.getenv('DATABASE_URL'):
+        return postgres_connect()
     c = sqlite3.connect(DB, timeout=30); c.row_factory = sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
 def now(): return datetime.now(timezone.utc).isoformat()
 def jl(v, d):
@@ -60,6 +64,10 @@ DEFAULT_SETTINGS = {
 }
 
 def init():
+    if os.getenv('DATABASE_URL'):
+        with conn() as c:
+            assert_schema_ready(c)
+        return
     with conn() as c:
         c.executescript('''CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,pw TEXT NOT NULL,role TEXT NOT NULL DEFAULT 'customer',created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS products(id TEXT PRIMARY KEY,title TEXT NOT NULL,slug TEXT UNIQUE NOT NULL,category TEXT NOT NULL,description TEXT NOT NULL,price INTEGER NOT NULL,license TEXT NOT NULL,preview TEXT NOT NULL DEFAULT '',package TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'draft',tags TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL);
@@ -279,7 +287,7 @@ def serve_image(key: str):
     return Response(data, media_type=ctype, headers={'Cache-Control': 'public, max-age=86400'})
 
 @app.get('/api/health')
-def health(): return {'status': 'ok', 'payments_enabled': PAYMENTS_ENABLED, 'payment_mode': PAY_MODE, 'key_id': KEY_ID if PAYMENTS_ENABLED else '', 'webhook_configured': bool(WEBHOOK_SECRET), 'email_delivery': False, 'google_sign_in': bool(os.getenv('FIREBASE_PROJECT_ID')), 'object_storage': 'r2' if is_r2() else 'local', 'database': 'sqlite'}
+def health(): return {'status': 'ok', 'payments_enabled': PAYMENTS_ENABLED, 'payment_mode': PAY_MODE, 'key_id': KEY_ID if PAYMENTS_ENABLED else '', 'webhook_configured': bool(WEBHOOK_SECRET), 'email_delivery': False, 'google_sign_in': bool(os.getenv('FIREBASE_PROJECT_ID')), 'object_storage': 'r2' if is_r2() else 'local', 'database': 'postgresql' if os.getenv('DATABASE_URL') else 'sqlite'}
 @app.get('/')
 def root(): return {'service': 'YKNOVA Studio API', 'health': '/api/health'}
 
@@ -292,7 +300,7 @@ def do_register(body, request):
         with conn() as c:
             c.execute('INSERT INTO users(id,email,name,pw,role,created_at,updated_at) VALUES(?,?,?,?,?,?,?)', (uid, body.email.lower(), body.name.strip(), hash_password(body.password), 'customer', now(), now()))
             raw = make_auth_token(c, uid, 'verify', 48)
-    except sqlite3.IntegrityError: raise HTTPException(409, 'Email already registered')
+    except (sqlite3.IntegrityError, psycopg.IntegrityError): raise HTTPException(409, 'Email already registered')
     send_email(body.email, 'Verify your YKNOVA Studio email', f'{SITE_URL}/verify-email?token={raw}')
     with conn() as c: u = one(c, f'SELECT {USER_COLS} FROM users WHERE id=?', (uid,))
     return {'token': token(u, 0), 'user': public_user(u)}
@@ -408,7 +416,7 @@ def firebase_exchange(body: TokenIn):
                         uid
                     )
                 )
-            except sqlite3.IntegrityError:
+            except (sqlite3.IntegrityError, psycopg.IntegrityError):
                 raise HTTPException(
                     409,
                     'An account with this identity already exists'
@@ -481,7 +489,7 @@ def verify_confirm(body: TokenIn):
         t = use_auth_token(c, body.token, 'verify')
         if t['payload']:
             try: c.execute("UPDATE users SET email=?,pending_email='',email_verified=1 WHERE id=?", (t['payload'], t['user_id']))
-            except sqlite3.IntegrityError: raise HTTPException(409, 'That email is already in use')
+            except (sqlite3.IntegrityError, psycopg.IntegrityError): raise HTTPException(409, 'That email is already in use')
         else: c.execute('UPDATE users SET email_verified=1 WHERE id=?', (t['user_id'],))
     return {'ok': True}
 
@@ -794,8 +802,8 @@ async def handle_webhook(request: Request):
     refund = payload.get('payload', {}).get('refund', {}).get('entity', {}) or {}
     rz_order = pay.get('order_id') or payload.get('payload', {}).get('order', {}).get('entity', {}).get('id')
     with conn() as c:
-        try: c.execute('INSERT INTO payment_events VALUES(?,?,?,?,?,?)', (uuid.uuid4().hex, eid, event, rz_order, body.decode()[:20000], now()))
-        except sqlite3.IntegrityError: return {'ok': True, 'duplicate': True}
+        event_insert = c.execute('INSERT INTO payment_events VALUES(?,?,?,?,?,?) ON CONFLICT(event_id) DO NOTHING', (uuid.uuid4().hex, eid, event, rz_order, body.decode()[:20000], now()))
+        if event_insert.rowcount == 0: return {'ok': True, 'duplicate': True}
         order = one(c, 'SELECT * FROM orders WHERE razorpay_order_id=?', (rz_order,)) if rz_order else None
         if refund and not order and refund.get('payment_id'): order = one(c, 'SELECT * FROM orders WHERE razorpay_payment_id=?', (refund['payment_id'],))
         if not order: return {'ok': True, 'unmatched': True}
@@ -1078,7 +1086,7 @@ def set_status(pid, status, user, action):
             missing = [n for n, ok in [('title', p['title']), ('description', len(p['description'].strip()) >= 20), ('cover image', p['preview']), ('source ZIP package', p['package'])] if not ok]
             if missing: raise HTTPException(422, 'Cannot publish — missing: ' + ', '.join(missing))
             if status == 'scheduled' and not p['scheduled_at']: raise HTTPException(422, 'Set a publication date first')
-        c.execute('UPDATE products SET status=?,updated_at=?,published_at=CASE WHEN ?="published" THEN COALESCE(published_at,?) ELSE published_at END WHERE id=?', (status, now(), status, now(), pid))
+        c.execute("UPDATE products SET status=?,updated_at=?,published_at=CASE WHEN ?='published' THEN COALESCE(published_at,?) ELSE published_at END WHERE id=?", (status, now(), status, now(), pid))
         audit(c, user, action, 'product', pid, {'title': p['title']})
         return admin_product(c, pid)
 @app.post('/api/admin/products/{pid}/publish')
@@ -1236,7 +1244,7 @@ def save_discount(c, body, did=None):
     try:
         if did: c.execute('UPDATE discounts SET code=?,type=?,value=?,starts_at=?,ends_at=?,usage_limit=?,per_customer_limit=?,min_order=?,product_ids=?,categories=?,active=? WHERE id=?', (*v, did))
         else: did = uuid.uuid4().hex; c.execute('INSERT INTO discounts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', (did, *v, now()))
-    except sqlite3.IntegrityError: raise HTTPException(409, 'Code already exists')
+    except (sqlite3.IntegrityError, psycopg.IntegrityError): raise HTTPException(409, 'Code already exists')
     return did
 @app.post('/api/admin/discounts')
 def create_discount(body: DiscountIn, user=Depends(admin)):
@@ -1262,7 +1270,7 @@ def create_category(body: CategoryIn, user=Depends(admin)):
     try:
         with conn() as c:
             cid = uuid.uuid4().hex; c.execute('INSERT INTO categories VALUES(?,?,?,?,?,?,?)', (cid, body.name.strip(), slugify(body.name), body.description, '', body.sort_order, int(body.active))); audit(c, user, 'create_category', 'category', cid, {'name': body.name})
-    except sqlite3.IntegrityError: raise HTTPException(409, 'Category already exists')
+    except (sqlite3.IntegrityError, psycopg.IntegrityError): raise HTTPException(409, 'Category already exists')
     return {'id': cid}
 @app.put('/api/admin/categories/{cid}')
 def update_category(cid: str, body: CategoryIn, user=Depends(admin)):
@@ -1270,7 +1278,7 @@ def update_category(cid: str, body: CategoryIn, user=Depends(admin)):
         old = one(c, 'SELECT * FROM categories WHERE id=?', (cid,))
         if not old: raise HTTPException(404, 'Not found')
         try: c.execute('UPDATE categories SET name=?,slug=?,description=?,sort_order=?,active=? WHERE id=?', (body.name.strip(), slugify(body.name), body.description, body.sort_order, int(body.active), cid))
-        except sqlite3.IntegrityError: raise HTTPException(409, 'Category name already exists')
+        except (sqlite3.IntegrityError, psycopg.IntegrityError): raise HTTPException(409, 'Category name already exists')
         c.execute('UPDATE products SET category=? WHERE category=?', (body.name.strip(), old['name'])); audit(c, user, 'update_category', 'category', cid, {'name': body.name})
     return {'ok': True}
 class CollectionIn(BaseModel):
@@ -1282,7 +1290,7 @@ def save_collection(c, body, cid=None):
     try:
         if cid: c.execute('UPDATE collections SET name=?,slug=?,description=?,featured=? WHERE id=?', (body.name, slugify(body.name), body.description, int(body.featured), cid))
         else: cid = uuid.uuid4().hex; c.execute('INSERT INTO collections VALUES(?,?,?,?,?,?)', (cid, body.name, slugify(body.name), body.description, int(body.featured), now()))
-    except sqlite3.IntegrityError: raise HTTPException(409, 'Collection already exists')
+    except (sqlite3.IntegrityError, psycopg.IntegrityError): raise HTTPException(409, 'Collection already exists')
     c.execute('DELETE FROM product_collections WHERE collection_id=?', (cid,))
     for pid in body.product_ids: c.execute('INSERT OR IGNORE INTO product_collections SELECT id,? FROM products WHERE id=?', (cid, pid))
     return cid
