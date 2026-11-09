@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { firebaseAuth } from './firebase';
 
 export const BACKEND = process.env.REACT_APP_BACKEND_URL;
 export const api = axios.create({ baseURL: `${BACKEND}/api` });
@@ -6,9 +7,17 @@ const TOKEN_KEY = 'yk_token';
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t) => (t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY));
 
-api.interceptors.request.use((cfg) => {
-  const t = getToken();
-  if (t) cfg.headers.Authorization = `Bearer ${t}`;
+api.interceptors.request.use(async (cfg) => {
+  // Firebase SDK owns authenticated user persistence and token refresh.
+  await firebaseAuth.authStateReady();
+  if (firebaseAuth.currentUser) {
+    const token = await firebaseAuth.currentUser.getIdToken();
+    cfg.headers.Authorization = `Bearer ${token}`;
+  } else {
+    // Temporary migration support only; disable via ALLOW_LEGACY_AUTH=0.
+    const legacy = getToken();
+    if (legacy) cfg.headers.Authorization = `Bearer ${legacy}`;
+  }
   return cfg;
 });
 

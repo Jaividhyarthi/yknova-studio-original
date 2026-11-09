@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / '.env')
 import jwt
 from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, Form, Request, Query
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
@@ -25,14 +25,14 @@ KEY_ID = os.environ.get('RAZORPAY_KEY_ID', ''); KEY_SECRET = os.environ.get('RAZ
 WEBHOOK_SECRET = os.environ.get('RAZORPAY_WEBHOOK_SECRET', '')
 PAY_MODE = os.environ.get('RAZORPAY_MODE', 'test')
 ALLOW_LIVE = os.environ.get('ALLOW_LIVE_PAYMENTS', '0') == '1'
-PAYMENTS_ENABLED = bool(KEY_ID and KEY_SECRET and ((PAY_MODE == 'test' and KEY_ID.startswith('rzp_test_')) or (PAY_MODE == 'live' and ALLOW_LIVE and KEY_ID.startswith('rzp_live_'))))
+PAYMENTS_ENABLED = bool(WEBHOOK_SECRET and KEY_ID and KEY_SECRET and ((PAY_MODE == 'test' and KEY_ID.startswith('rzp_test_')) or (PAY_MODE == 'live' and ALLOW_LIVE and KEY_ID.startswith('rzp_live_'))))
 MAX_ZIP = int(os.environ.get('MAX_ZIP_MB', '100')) * 1024 * 1024
 ADMIN_ROLES = ('admin', 'super_admin')
 
 app = FastAPI(title='YKNOVA Studio API', version='3.0')
 app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_credentials=False, allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], allow_headers=['Authorization', 'Content-Type'])
 app.mount('/images', StaticFiles(directory=str(IMAGES)), name='images')
-from storage import put_object, get_object, init_storage
+from storage import put_object, get_object, init_storage, presign_download, is_r2
 
 def conn():
     c = sqlite3.connect(DB, timeout=30); c.row_factory = sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
@@ -124,22 +124,65 @@ def verify_password(pw, encoded):
         blob = base64.b64decode(encoded); return hmac.compare_digest(blob[16:], hashlib.pbkdf2_hmac('sha256', pw.encode(), blob[:16], 250000))
     except Exception: return False
 
-def token(user, tv=0): return jwt.encode({'sub': user['id'], 'role': user['role'], 'tv': tv, 'exp': int(time.time()) + 60 * 60 * 24}, SECRET, algorithm='HS256')
-USER_COLS = 'id,email,name,role,created_at,status,email_verified,phone,pending_email,notify_prefs,last_login_at,token_version'
+def token(user, tv=0): return jwt.encode({'sub': user['id'], 'role': user['role'], 'tv': tv, 'exp': int(time.time()) + 60 * 60 * 2}, SECRET, algorithm='HS256')
+USER_COLS = 'id,email,name,role,created_at,status,email_verified,phone,pending_email,notify_prefs,last_login_at,token_version,firebase_uid'
 def public_user(u):
     d = {k: u[k] for k in ('id', 'email', 'name', 'role', 'created_at', 'status', 'email_verified', 'phone', 'pending_email', 'last_login_at') if k in u}
     d['notify_prefs'] = jl(u.get('notify_prefs'), {}); d['email_verified'] = bool(d.get('email_verified')); return d
 
+def _firebase_principal(id_token):
+    """Verify real Firebase bearer tokens and resolve local DB roles by UID."""
+    import firebase_admin
+    from firebase_admin import auth as fb_auth, credentials
+    project = os.getenv('FIREBASE_PROJECT_ID')
+    if not project:
+        raise HTTPException(503, 'Firebase authentication not configured')
+    try:
+        try: app_instance = firebase_admin.get_app()
+        except ValueError:
+            app_instance = firebase_admin.initialize_app(credentials.ApplicationDefault(), {'projectId': project})
+        claims = fb_auth.verify_id_token(id_token, app=app_instance, check_revoked=True)
+    except (fb_auth.ExpiredIdTokenError, fb_auth.InvalidIdTokenError,
+            fb_auth.RevokedIdTokenError, fb_auth.UserDisabledError, ValueError):
+        raise HTTPException(401, 'Invalid or expired Firebase session')
+    except Exception:
+        log.exception('Firebase token verification failed')
+        raise HTTPException(503, 'Authentication service unavailable')
+    email = (claims.get('email') or '').strip().lower()
+    uid = claims.get('uid')
+    if not uid or not email or not claims.get('email_verified'):
+        raise HTTPException(403, 'Verified Firebase email required')
+    with conn() as c:
+        user = one(c, f'SELECT {USER_COLS} FROM users WHERE firebase_uid=?', (uid,))
+    if not user or user['email'].lower() != email:
+        raise HTTPException(401, 'Firebase account not linked to this store account')
+    if user['status'] != 'active':
+        raise HTTPException(403, 'Account is not active')
+    return user
+
+
 def auth(authorization: Optional[str] = Header(default=None)):
-    if not authorization or not authorization.startswith('Bearer '): raise HTTPException(401, 'Sign in required')
-    try: claims = jwt.decode(authorization[7:], SECRET, algorithms=['HS256'])
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(401, 'Sign in required')
+    raw_token = authorization[7:]
+    try:
+        algorithm = jwt.get_unverified_header(raw_token).get('alg')
+    except Exception:
+        raise HTTPException(401, 'Invalid session')
+    if algorithm == 'RS256':
+        return _firebase_principal(raw_token)
+    if algorithm != 'HS256' or os.getenv('ALLOW_LEGACY_AUTH', '1') != '1':
+        raise HTTPException(401, 'Legacy sessions disabled')
+    try: claims = jwt.decode(raw_token, SECRET, algorithms=['HS256'])
     except Exception: raise HTTPException(401, 'Invalid or expired session')
-    if claims.get('typ'): raise HTTPException(401, 'Invalid session')
-    with conn() as c: u = one(c, f'SELECT {USER_COLS} FROM users WHERE id=?', (claims['sub'],))
-    if not u: raise HTTPException(401, 'Account not found')
-    if claims.get('tv', 0) != u['token_version']: raise HTTPException(401, 'Session ended. Please sign in again')
-    if u['status'] == 'suspended': raise HTTPException(403, 'Account suspended')
-    return u
+    if claims.get('typ') or not claims.get('sub'):
+        raise HTTPException(401, 'Invalid session')
+    with conn() as c: user = one(c, f'SELECT {USER_COLS} FROM users WHERE id=?', (claims['sub'],))
+    if not user: raise HTTPException(401, 'Account not found')
+    if claims.get('tv', 0) != user['token_version']:
+        raise HTTPException(401, 'Session ended. Please sign in again')
+    if user['status'] != 'active': raise HTTPException(403, 'Account is not active')
+    return user
 def optional_auth(authorization: Optional[str] = Header(default=None)):
     try: return auth(authorization) if authorization else None
     except HTTPException: return None
@@ -216,7 +259,10 @@ class ReviewIn(BaseModel):
 def startup():
     init()
     try: init_storage()
-    except Exception as ex: log.error('Object storage init failed: %s', ex)
+    except Exception as ex:
+        log.exception('Object storage init failed')
+        if os.getenv('REQUIRE_R2', '0') == '1':
+            raise RuntimeError('Required private R2 storage unavailable') from ex
 
 _img_cache = {}
 @app.get('/api/images/{key:path}')
@@ -233,12 +279,13 @@ def serve_image(key: str):
     return Response(data, media_type=ctype, headers={'Cache-Control': 'public, max-age=86400'})
 
 @app.get('/api/health')
-def health(): return {'status': 'ok', 'payments_enabled': PAYMENTS_ENABLED, 'payment_mode': PAY_MODE, 'key_id': KEY_ID if PAYMENTS_ENABLED else '', 'webhook_configured': bool(WEBHOOK_SECRET), 'email_delivery': False, 'google_sign_in': False}
+def health(): return {'status': 'ok', 'payments_enabled': PAYMENTS_ENABLED, 'payment_mode': PAY_MODE, 'key_id': KEY_ID if PAYMENTS_ENABLED else '', 'webhook_configured': bool(WEBHOOK_SECRET), 'email_delivery': False, 'google_sign_in': bool(os.getenv('FIREBASE_PROJECT_ID')), 'object_storage': 'r2' if is_r2() else 'local', 'database': 'sqlite'}
 @app.get('/')
 def root(): return {'service': 'YKNOVA Studio API', 'health': '/api/health'}
 
 # ---------- auth ----------
 def do_register(body, request):
+    if os.getenv('ALLOW_LEGACY_AUTH', '1') != '1': raise HTTPException(410, 'Use Firebase registration')
     rate_limit('reg:' + client_ip(request), 8, 3600)
     uid = uuid.uuid4().hex
     try:
@@ -255,6 +302,7 @@ def register(body: Register, request: Request): return do_register(body, request
 def register_v3(body: Register, request: Request): return do_register(body, request)
 
 def do_login(body, request):
+    if os.getenv('ALLOW_LEGACY_AUTH', '1') != '1': raise HTTPException(410, 'Use Firebase login')
     rate_limit('login:' + client_ip(request) + body.email.lower(), 10, 600)
     with conn() as c:
         u = one(c, 'SELECT * FROM users WHERE email=?', (body.email.lower(),))
@@ -404,6 +452,7 @@ def logout_all(user=Depends(auth)):
 
 @app.post('/api/auth/forgot-password')
 def forgot(body: EmailOnly, request: Request):
+    if os.getenv('ALLOW_LEGACY_AUTH', '1') != '1': raise HTTPException(410, 'Use Firebase password reset')
     rate_limit('forgot:' + client_ip(request), 5, 3600)
     with conn() as c:
         u = one(c, 'SELECT id,email FROM users WHERE email=?', (body.email.lower(),))
@@ -413,18 +462,21 @@ def forgot(body: EmailOnly, request: Request):
     return {'ok': True, 'message': 'If an account exists for this email, a reset link has been sent.'}
 @app.post('/api/auth/reset-password')
 def reset_password(body: ResetIn):
+    if os.getenv('ALLOW_LEGACY_AUTH', '1') != '1': raise HTTPException(410, 'Use Firebase password reset')
     with conn() as c:
         t = use_auth_token(c, body.token, 'reset')
         c.execute('UPDATE users SET pw=?,token_version=token_version+1,updated_at=? WHERE id=?', (hash_password(body.new_password), now(), t['user_id']))
     return {'ok': True}
 @app.post('/api/auth/verify-email/request')
 def verify_request(user=Depends(auth)):
+    if user.get('firebase_uid'): raise HTTPException(410, 'Email verification is managed by Firebase')
     rate_limit('verify:' + user['id'], 3, 3600)
     with conn() as c: raw = make_auth_token(c, user['id'], 'verify', 48)
     send_email(user['email'], 'Verify your YKNOVA Studio email', f'{SITE_URL}/verify-email?token={raw}')
     return {'ok': True}
 @app.post('/api/auth/verify-email/confirm')
 def verify_confirm(body: TokenIn):
+    if os.getenv('ALLOW_LEGACY_AUTH', '1') != '1': raise HTTPException(410, 'Use Firebase email verification')
     with conn() as c:
         t = use_auth_token(c, body.token, 'verify')
         if t['payload']:
@@ -441,12 +493,16 @@ def update_profile(body: ProfileUpdate, user=Depends(auth)):
 @app.put('/api/me/password')
 def change_password(body: PasswordUpdate, user=Depends(auth)):
     with conn() as c:
-        row = one(c, 'SELECT pw FROM users WHERE id=?', (user['id'],))
+        row = one(c, 'SELECT pw,firebase_uid FROM users WHERE id=?', (user['id'],))
+        if row and row.get('firebase_uid'):
+            raise HTTPException(409, 'Password is managed by Firebase Authentication')
         if not row or not verify_password(body.current_password, row['pw']): raise HTTPException(400, 'Current password is incorrect')
         c.execute('UPDATE users SET pw=?,updated_at=? WHERE id=?', (hash_password(body.new_password), now(), user['id']))
     return {'ok': True}
 @app.put('/api/me/email')
 def change_email(body: EmailOnly, user=Depends(auth)):
+    if user.get('firebase_uid'):
+        raise HTTPException(409, 'Email is managed by Firebase Authentication')
     new = body.email.lower()
     with conn() as c:
         if one(c, 'SELECT id FROM users WHERE email=?', (new,)): raise HTTPException(409, 'That email is already in use')
@@ -711,7 +767,7 @@ def verify_checkout(body: VerifyPay, user=Depends(auth)):
         order = one(c, 'SELECT * FROM orders WHERE razorpay_order_id=? AND user_id=?', (body.razorpay_order_id, user['id']))
         if not order: raise HTTPException(404, 'Order not found')
     pay = razor('GET', 'payments/' + body.razorpay_payment_id)
-    if pay.get('order_id') != body.razorpay_order_id or int(pay.get('amount', 0)) != order['total']: raise HTTPException(400, 'Payment does not match this order')
+    if pay.get('order_id') != body.razorpay_order_id or pay.get('currency') != 'INR' or int(pay.get('amount', 0)) != order['total']: raise HTTPException(400, 'Payment does not match this order')
     if pay.get('status') == 'authorized':
         pay = razor('POST', f"payments/{body.razorpay_payment_id}/capture", {'amount': order['total'], 'currency': 'INR'})
     with conn() as c:
@@ -743,7 +799,24 @@ async def handle_webhook(request: Request):
         order = one(c, 'SELECT * FROM orders WHERE razorpay_order_id=?', (rz_order,)) if rz_order else None
         if refund and not order and refund.get('payment_id'): order = one(c, 'SELECT * FROM orders WHERE razorpay_payment_id=?', (refund['payment_id'],))
         if not order: return {'ok': True, 'unmatched': True}
-        if event in ('payment.captured', 'order.paid') and int(pay.get('amount', order['total'])) == order['total']: mark_paid(c, order, pay.get('id') or order['razorpay_payment_id'])
+        if event == 'payment.captured' and (pay.get('order_id') == order['razorpay_order_id'] and
+            pay.get('currency') == 'INR' and int(pay.get('amount', 0)) == order['total'] and
+            pay.get('status') == 'captured' and pay.get('id')):
+            mark_paid(c, order, pay['id'])
+        elif event == 'order.paid':
+            # Do not trust the webhook's order amount or a missing payment entity.
+            verified_order = razor('GET', 'orders/' + order['razorpay_order_id'])
+            if (verified_order.get('id') == order['razorpay_order_id'] and
+                verified_order.get('status') == 'paid' and
+                verified_order.get('currency') == 'INR' and
+                int(verified_order.get('amount', 0)) == order['total'] and
+                int(verified_order.get('amount_paid', 0)) >= order['total']):
+                payments = razor('GET', 'orders/' + order['razorpay_order_id'] + '/payments')
+                captured = [x for x in payments.get('items', []) if x.get('status') == 'captured' and
+                    x.get('order_id') == order['razorpay_order_id'] and x.get('currency') == 'INR' and
+                    int(x.get('amount', 0)) == order['total'] and x.get('id')]
+                if captured:
+                    mark_paid(c, order, captured[0]['id'])
         elif event == 'payment.authorized': c.execute("UPDATE orders SET status='authorized',updated_at=? WHERE id=? AND status='pending'", (now(), order['id']))
         elif event == 'payment.failed': c.execute("UPDATE orders SET status='failed',failure_reason=?,updated_at=? WHERE id=? AND status IN ('pending','authorized')", ((pay.get('error_description') or '')[:300], now(), order['id']))
         elif event.startswith('refund.') and refund: record_refund(c, order, refund)
@@ -805,9 +878,16 @@ def serve_download(uid, pid):
         fname = (f['original_filename'] if f else slugify(e['title']) + '.zip')
         key = e['package']
     if '/' in key:
-        try: data, _ = get_object(key)
-        except Exception: raise HTTPException(404, 'File unavailable; contact support')
-        resp = Response(data, media_type='application/zip', headers={'Content-Disposition': f'attachment; filename="{fname}"', 'Cache-Control': 'no-store'})
+        if is_r2():
+            try: url = presign_download(key, fname, expires=60)
+            except Exception:
+                log.exception('Failed to generate private R2 download URL')
+                raise HTTPException(503, 'Download temporarily unavailable')
+            resp = RedirectResponse(url, status_code=302, headers={'Cache-Control': 'no-store'})
+        else:
+            try: data, _ = get_object(key)
+            except Exception: raise HTTPException(404, 'File unavailable; contact support')
+            resp = Response(data, media_type='application/zip', headers={'Content-Disposition': f'attachment; filename="{fname}"', 'Cache-Control': 'no-store'})
     else:
         path = PACKAGES / key  # legacy v2 files on the Render persistent disk
         if not path.is_file(): raise HTTPException(404, 'File unavailable; contact support')

@@ -15,7 +15,7 @@ const T = {
 
 export default function Auth({ mode }) {
   const [sp] = useSearchParams(); const nav = useNavigate(); const {
-    login, firebaseLogin, firebaseRegister,
+    firebaseLogin, firebaseRegister,
     googleLogin, firebaseResetPassword, user, refresh
   } = useAuth();
   const [f, setF] = useState({ name: '', email: '', password: '' }); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [err, setErr] = useState('');
@@ -28,7 +28,7 @@ export default function Auth({ mode }) {
   const submit = async (e) => {
     e.preventDefault(); setErr(''); setBusy(true);
     try {
-      if (mode === 'login') go(await login(f.email, f.password));
+      if (mode === 'login') go(await firebaseLogin(f.email, f.password));
       else if (mode === 'register') {
         await firebaseRegister(f);
         setMsg('Account created! Check your email and click the Firebase verification link. Then return to Sign in with Firebase.');
@@ -41,20 +41,6 @@ export default function Auth({ mode }) {
     } catch (ex) { setErr(errMsg(ex)); }
     setBusy(false);
   };
-  const submitFirebase = async () => {
-    setErr('');
-    setBusy(true);
-    try {
-      const u = await firebaseLogin(f.email, f.password);
-      toast.success('Signed in with Firebase');
-      go(u);
-    } catch (e) {
-      setErr(errMsg(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const submitGoogle = async () => {
     setErr('');
     setBusy(true);
@@ -89,17 +75,6 @@ export default function Auth({ mode }) {
             {err && <p className="text-sm" style={{ color: '#F19A8E' }} role="alert" data-testid="auth-error">{err}</p>}
             <button disabled={busy} className="yk-btn w-full !py-3" data-testid="auth-submit">{busy ? 'Please wait…' : { login: 'Sign in', register: 'Create account', 'forgot-password': 'Send reset link', 'reset-password': 'Update password' }[mode]}</button>
           </form>
-        )}
-        {mode === 'login' && !msg && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={submitFirebase}
-            className="yk-btn mt-4 w-full !py-3"
-            data-testid="firebase-login"
-          >
-            Sign in with Firebase
-          </button>
         )}
         {['login', 'register'].includes(mode) && !msg && (
           <button

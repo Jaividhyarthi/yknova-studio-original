@@ -10,7 +10,8 @@ import {
   sendPasswordResetEmail,
   signInWithPopup,
   GoogleAuthProvider,
-  signOut
+  signOut,
+  onAuthStateChanged
 } from 'firebase/auth';
 
 const AuthCtx = createContext(null);
@@ -24,12 +25,17 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
   const refresh = useCallback(async () => {
-    if (!getToken()) { setUser(null); setReady(true); return; }
+    await firebaseAuth.authStateReady();
+    if (!firebaseAuth.currentUser && !getToken()) { setUser(null); setReady(true); return; }
     try { setUser((await api.get('/auth/me')).data); } catch { setToken(null); setUser(null); }
     setReady(true);
   }, []);
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(firebaseAuth, () => { refresh(); });
+    return () => unsubscribe();
+  }, [refresh]);
   const login = async (email, password) => {
+    await signOut(firebaseAuth).catch(() => {});
     const { data } = await api.post('/auth/login', { email, password });
     setToken(data.token); setUser(data.user); return data.user;
   };
@@ -42,7 +48,7 @@ export function AuthProvider({ children }) {
       const { data } = await api.post('/auth/firebase/exchange', {
         token: idToken
       });
-      setToken(data.token);
+      setToken(null);
       setUser(data.user);
       return data.user;
     } catch (error) {
@@ -72,7 +78,7 @@ export function AuthProvider({ children }) {
       const { data } = await api.post('/auth/firebase/exchange', {
         token: idToken
       });
-      setToken(data.token);
+      setToken(null);
       setUser(data.user);
       return data.user;
     } catch (error) {
