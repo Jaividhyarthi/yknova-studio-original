@@ -1,0 +1,111 @@
+{
+  "project_name": "YKNOVA Studio",
+  "app_type": "e-commerce hybrid_fullstack",
+  "currency": "INR (₹)",
+  "reference_sources": [
+    "/app/refs/01-Storefront.png",
+    "/app/refs/02-Admin-Portal.png",
+    "/app/refs/03-Customer-Portal.png",
+    "/app/refs/04-Cart-Checkout.png"
+  ],
+  "brand_identity": {
+    "archetype": "ORGANIC & EARTHY / PREMIER DIGITAL MARKETPLACE",
+    "tone": "Refined, architectural, premium, structured, warm, highly legible",
+    "forbidden_styles": [
+      "glow",
+      "neon",
+      "glassmorphism",
+      "excessive gradients",
+      "blobs",
+      "AI illustrations",
+      "emojis"
+    ]
+  },
+  "colors": {
+    "primary_dark_brown": "#5C2018",
+    "terracotta": "#BC4639",
+    "dusty_rose": "#D4A59A",
+    "warm_cream": "#F3E0DC",
+    "accent_pay_blue": "#4285F4",
+    "neutral_bg_light": "#FAF6F5",
+    "card_bg_light": "#FFFFFF",
+    "card_bg_warm": "#FAF3F1",
+    "text_dark": "#2C120E",
+    "text_muted": "#6E5B57",
+    "text_light": "#FFFFFF",
+    "border_subtle": "#EADCD8",
+    "border_medium": "#D4C2BD",
+    "status_badges": {
+      "active_completed": { "bg": "#E8F5E9", "text": "#2E7D32" },
+      "pending_processing": { "bg": "#FFF8E1", "text": "#F57F17" },
+      "draft_inactive": { "bg": "#F5F5F5", "text": "#616161" },
+      "refunded_cancelled": { "bg": "#FFEBEE", "text": "#C62828" }
+    }
+  },
+  "typography": {
+    "headings_font": "Manrope, sans-serif",
+    "body_font": "DM Sans, sans-serif",
+    "scale": {
+      "h1_hero": "text-4xl sm:text-5xl font-extrabold tracking-tight leading-tight",
+      "h2_section": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h3_card": "text-lg sm:text-xl font-semibold",
+      "body": "text-sm sm:text-base font-normal leading-relaxed",
+      "caption_label": "text-xs font-medium uppercase tracking-wider"
+    }
+  },
+  "surfaces_and_borders": {
+    "border_radii": {
+      "sm": "4px (rounded)",
+      "md": "8px (rounded-md)",
+      "lg": "12px (rounded-lg)"
+    },
+    "shadows": "restrained (shadow-sm, shadow-md max, no harsh blur, 1px solid subtle borders mandatory)",
+    "spacing": "Generous (p-4, p-6, p-8, gap-6, gap-8)"
+  },
+  "component_styles": {
+    "button_primary": "bg-[#BC4639] hover:bg-[#5C2018] text-white font-medium px-5 py-2.5 rounded-md transition-colors duration-200 shadow-sm",
+    "button_secondary": "bg-[#F3E0DC] hover:bg-[#D4A59A] text-[#5C2018] font-medium px-4 py-2 rounded-md transition-colors duration-200",
+    "button_pay_accent": "bg-[#4285F4] hover:bg-[#3367D6] text-white font-semibold px-6 py-3 rounded-md transition-colors duration-200 shadow-sm",
+    "category_pill_active": "bg-[#5C2018] text-white font-medium px-4 py-1.5 rounded-full text-sm",
+    "category_pill_inactive": "bg-white text-[#5C2018] border border-[#EADCD8] hover:border-[#BC4639] px-4 py-1.5 rounded-full text-sm transition-colors",
+    "input_field": "bg-white border border-[#EADCD8] focus:border-[#BC4639] focus:ring-1 focus:ring-[#BC4639] rounded-md px-3 py-2 text-sm outline-none text-[#2C120E]",
+    "card_framed": "bg-white border border-[#EADCD8] rounded-lg p-5 shadow-sm hover:shadow-md transition-shadow duration-200",
+    "table": "w-full text-left border-collapse bg-white rounded-lg overflow-hidden border border-[#EADCD8]",
+    "chart": "Recharts line/bar chart using #BC4639 primary stroke/fill, #5C2018 secondary, #D4A59A grid, tooltip background #FFFFFF with #5C2018 border"
+  },
+  "layout_modules": {
+    "storefront": "Announcement bar (#5C2018 bg), sticky navbar w/ search, theme toggle, wishlist & cart triggers; 2-col hero w/ framed template previews; category pills filter; 'Most wanted this week' 3 featured cards grid; product catalog grid; 4-column earthy footer with newsletter sign-up",
+    "admin_portal": "/admin path: sidebar navigation (Dashboard, Templates, Orders, Analytics, Settings); KPI summary cards; sales/revenue trend chart; top template performance table; recent order list; template upload & editor drawer",
+    "customer_portal": "/account path: customer sidebar; welcome header w/ architectural photography overlay; quick stats cards; library downloads; orders history; invoices download; saved wishlist; account settings",
+    "cart_and_checkout": "Cart item list w/ quantity adjust & price breakdown in INR (₹); 3-step checkout flow (Contact Info -> Address -> Payment with Razorpay modal trigger using #4285F4 accent pay button)"
+  },
+  "image_urls": [
+    {
+      "category": "hero_and_featured_previews",
+      "url": "https://images.unsplash.com/photo-1554357475-accb8a88a330?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwxfHxwZXRyYSUyMHNhbmRzdG9uZSUyMGFyY2hpdGVjdHVyZSUyMHdlYnNpdGUlMjB0ZW1wbGF0ZSUyMHByZXZpZXd8ZW58MHx8fHwxNzk0MTkyNjYzfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Petra sandstone architecture hero template preview"
+    },
+    {
+      "category": "customer_portal_header",
+      "url": "https://images.unsplash.com/photo-1601046500837-dd62bb53e3a5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwzfHxwZXRyYSUyMHNhbmRzdG9uZSUyMGFyY2hpdGVjdHVyZSUyMHdlYnNpdGUlMjB0ZW1wbGF0ZSUyMHByZXZpZXd8ZW58MHx8fHwxNzk0MTkyNjYzfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Architectural sandstone pillar header photo"
+    },
+    {
+      "category": "template_card_thumbnail_1",
+      "url": "https://images.unsplash.com/photo-1691871070176-5b8d7a3c3f4a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwyfHxwZXRyYSUyMHNhbmRzdG9uZSUyMGFyY2hpdGVjdHVyZSUyMHdlYnNpdGUlMjB0ZW1wbGF0ZSUyMHByZXZpZXd8ZW58MHx8fHwxNzk0MTkyNjYzfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Sandstone facade UI template preview"
+    },
+    {
+      "category": "template_card_thumbnail_2",
+      "url": "https://images.unsplash.com/photo-1700554781982-57ce07ef3262?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHw0fHxwZXRyYSUyMHNhbmRzdG9uZSUyMGFyY2hpdGVjdHVyZSUyMHdlYnNpdGUlMjB0ZW1wbGF0ZSUyMHByZXZpZXd8ZW58MHx8fHwxNzk0MTkyNjYzfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Minimalist architectural windows template detail"
+    }
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": {
+    "data_testid_rule": "ALL interactive elements (buttons, links, inputs, selects, modals, tabs, table rows) MUST include explicit data-testid attributes (e.g. data-testid=\"pay-button\", data-testid=\"cart-item-remove\").",
+    "currency_formatting": "Always display prices in INR format with symbol ₹ (e.g., ₹2,499, ₹4,999).",
+    "motion_and_animation": "Keep subtle transitions between 150ms and 250ms (e.g. transition-colors duration-200). Respect prefers-reduced-motion.",
+    "icons_and_media": "Use Lucide-react icons cleanly. Absolutely NO emoji characters as icons or titles.",
+    "accessibility_and_contrast": "Ensure text contrast meets WCAG AA standards over #FAF6F5 and #FFFFFF backgrounds with dark brown #5C2018 text."
+  }
+}
