@@ -14,7 +14,10 @@ const T = {
 };
 
 export default function Auth({ mode }) {
-  const [sp] = useSearchParams(); const nav = useNavigate(); const { login, firebaseLogin, register, user, refresh } = useAuth();
+  const [sp] = useSearchParams(); const nav = useNavigate(); const {
+    login, firebaseLogin, firebaseRegister,
+    googleLogin, firebaseResetPassword, user, refresh
+  } = useAuth();
   const [f, setF] = useState({ name: '', email: '', password: '' }); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [err, setErr] = useState('');
   const next = sp.get('next'); const token = sp.get('token');
   useTitle(T[mode][0]);
@@ -26,8 +29,14 @@ export default function Auth({ mode }) {
     e.preventDefault(); setErr(''); setBusy(true);
     try {
       if (mode === 'login') go(await login(f.email, f.password));
-      else if (mode === 'register') { go(await register(f)); toast.success('Account created'); }
-      else if (mode === 'forgot-password') setMsg((await api.post('/auth/forgot-password', { email: f.email })).data.message);
+      else if (mode === 'register') {
+        await firebaseRegister(f);
+        setMsg('Account created! Check your email and click the Firebase verification link. Then return to Sign in with Firebase.');
+      }
+      else if (mode === 'forgot-password') {
+        await firebaseResetPassword(f.email);
+        setMsg('If this is a Firebase account, a password reset email will be sent.');
+      }
       else if (mode === 'reset-password') { await api.post('/auth/reset-password', { token, new_password: f.password }); toast.success('Password updated. Please sign in.'); nav('/login'); }
     } catch (ex) { setErr(errMsg(ex)); }
     setBusy(false);
@@ -38,6 +47,20 @@ export default function Auth({ mode }) {
     try {
       const u = await firebaseLogin(f.email, f.password);
       toast.success('Signed in with Firebase');
+      go(u);
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitGoogle = async () => {
+    setErr('');
+    setBusy(true);
+    try {
+      const u = await googleLogin();
+      toast.success('Signed in with Google');
       go(u);
     } catch (e) {
       setErr(errMsg(e));
@@ -76,6 +99,17 @@ export default function Auth({ mode }) {
             data-testid="firebase-login"
           >
             Sign in with Firebase
+          </button>
+        )}
+        {['login', 'register'].includes(mode) && !msg && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={submitGoogle}
+            className="yk-btn mt-3 w-full !py-3"
+            data-testid="google-login"
+          >
+            Continue with Google
           </button>
         )}
         <p className="mt-6 text-sm yk-muted">

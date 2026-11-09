@@ -2,7 +2,16 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { toast } from 'sonner';
 import { api, getToken, setToken, errMsg } from './api';
 import { firebaseAuth } from './firebase';
-import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithPopup,
+  GoogleAuthProvider,
+  signOut
+} from 'firebase/auth';
 
 const AuthCtx = createContext(null);
 const StoreCtx = createContext(null);
@@ -42,6 +51,40 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const firebaseRegister = async ({ name, email, password }) => {
+    const result = await createUserWithEmailAndPassword(
+      firebaseAuth, email.trim(), password
+    );
+    try {
+      await updateProfile(result.user, { displayName: name.trim() });
+      await sendEmailVerification(result.user);
+    } finally {
+      await signOut(firebaseAuth);
+    }
+  };
+
+  const googleLogin = async () => {
+    const result = await signInWithPopup(
+      firebaseAuth, new GoogleAuthProvider()
+    );
+    try {
+      const idToken = await result.user.getIdToken(true);
+      const { data } = await api.post('/auth/firebase/exchange', {
+        token: idToken
+      });
+      setToken(data.token);
+      setUser(data.user);
+      return data.user;
+    } catch (error) {
+      await signOut(firebaseAuth).catch(() => {});
+      throw error;
+    }
+  };
+
+  const firebaseResetPassword = async (email) => {
+    await sendPasswordResetEmail(firebaseAuth, email.trim());
+  };
+
   const register = async (body) => {
     const { data } = await api.post('/auth/register', body);
     setToken(data.token); setUser(data.user); return data.user;
@@ -51,7 +94,7 @@ export function AuthProvider({ children }) {
     await signOut(firebaseAuth).catch(() => {});
     setToken(null); setUser(null);
   };
-  return <AuthCtx.Provider value={{ user, ready, login, firebaseLogin, register, logout, refresh, setUser }}>{children}</AuthCtx.Provider>;
+  return <AuthCtx.Provider value={{ user, ready, login, firebaseLogin, firebaseRegister, googleLogin, firebaseResetPassword, register, logout, refresh, setUser }}>{children}</AuthCtx.Provider>;
 }
 export const useAuth = () => useContext(AuthCtx);
 
